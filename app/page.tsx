@@ -25,20 +25,66 @@ const COUNTRY_CODES = [
   { code: "+7", country: "RU" },
 ];
 
+function getReminderHint(appointmentTime: string): {
+  show: boolean;
+  withinHour: boolean;
+  minsAway: number;
+} {
+  if (!appointmentTime) return { show: false, withinHour: false, minsAway: 0 };
+  const diffMs = new Date(appointmentTime).getTime() - Date.now();
+  const minsAway = Math.round(diffMs / 1000 / 60);
+  if (diffMs <= 0) return { show: true, withinHour: false, minsAway };
+  return { show: true, withinHour: minsAway <= 60, minsAway };
+}
+
 export default function Home() {
   const [form, setForm] = useState({
     name: "",
     phone: "",
     appointment_time: "",
   });
-
   const [countryCode, setCountryCode] = useState("+91");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [loading, setLoading] = useState(false);
+  const [reminderStatus, setReminderStatus] = useState<"idle" | "scheduled" | "sent">("idle");
+  const [reminderCountdown, setReminderCountdown] = useState<number | null>(null);
+
+  const hint = getReminderHint(form.appointment_time);
+
+  function scheduleReminder(appointmentTime: string, name: string, phone: string) {
+    const diffMs = new Date(appointmentTime).getTime() - Date.now();
+    const diffMins = diffMs / 1000 / 60;
+    if (diffMins <= 0 || diffMins > 60) return;
+
+    setReminderStatus("scheduled");
+    setReminderCountdown(60);
+
+    let seconds = 60;
+    const ticker = setInterval(() => {
+      seconds -= 1;
+      setReminderCountdown(seconds);
+      if (seconds <= 0) clearInterval(ticker);
+    }, 1000);
+
+    setTimeout(async () => {
+      clearInterval(ticker);
+      setReminderCountdown(null);
+      try {
+        await fetch("/api/send-reminder", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, phone, appointment_time: appointmentTime }),
+        });
+        setReminderStatus("sent");
+      } catch (err) {
+        console.error("Reminder failed:", err);
+        setReminderStatus("idle");
+      }
+    }, 60_000);
+  }
 
   async function submit() {
     const fullPhone = `${countryCode}${phoneNumber.replace(/\s+/g, "")}`;
-
     try {
       setLoading(true);
       const res = await fetch("/api/appointments", {
@@ -52,6 +98,7 @@ export default function Home() {
         return;
       }
       alert("Appointment created successfully!");
+      scheduleReminder(form.appointment_time, form.name, fullPhone);
       setForm({ name: "", phone: "", appointment_time: "" });
       setPhoneNumber("");
       setCountryCode("+91");
@@ -67,7 +114,6 @@ export default function Home() {
     <>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Mono:wght@300;400;500&display=swap');
-
         *, *::before, *::after { box-sizing: border-box; }
 
         .booking-root {
@@ -79,7 +125,6 @@ export default function Home() {
           font-family: 'DM Mono', monospace;
           padding: 24px;
         }
-
         .booking-card {
           background: #ffffff;
           border: 1.5px solid #111;
@@ -88,7 +133,6 @@ export default function Home() {
           padding: 48px 44px;
           box-shadow: 6px 6px 0px #111;
         }
-
         .booking-label {
           font-size: 10px;
           letter-spacing: 0.18em;
@@ -97,7 +141,6 @@ export default function Home() {
           margin-bottom: 6px;
           display: block;
         }
-
         .booking-title {
           font-family: 'DM Serif Display', serif;
           font-size: 32px;
@@ -105,26 +148,22 @@ export default function Home() {
           margin: 0 0 8px 0;
           line-height: 1.1;
         }
-
         .booking-divider {
           width: 40px;
           height: 2px;
           background: #111;
           margin: 16px 0 36px;
         }
-
         .field-group {
           display: flex;
           flex-direction: column;
           gap: 24px;
         }
-
         .field-wrap {
           display: flex;
           flex-direction: column;
           gap: 6px;
         }
-
         .field-wrap label {
           font-size: 10px;
           letter-spacing: 0.14em;
@@ -132,7 +171,6 @@ export default function Home() {
           color: #555;
           font-weight: 500;
         }
-
         .booking-input {
           background: #fafafa;
           border: 1px solid #ccc;
@@ -146,33 +184,92 @@ export default function Home() {
           width: 100%;
           -webkit-appearance: none;
         }
-
         .booking-input:focus {
           border-color: #111;
           background: #fff;
         }
-
-        .booking-input::placeholder {
-          color: #bbb;
-        }
-
+        .booking-input::placeholder { color: #bbb; }
         .booking-input[type="datetime-local"]::-webkit-calendar-picker-indicator {
           filter: invert(0.5);
           cursor: pointer;
         }
 
-        /* Phone row */
-        .phone-row {
+        /* ── TIME HINT ── */
+        .time-hint {
+          font-size: 10px;
+          letter-spacing: 0.06em;
+          margin-top: 6px;
+          min-height: 16px;
           display: flex;
-          gap: 0;
-          width: 100%;
+          align-items: center;
+          gap: 6px;
         }
-
-        .phone-code-wrap {
-          position: relative;
+        .time-hint-dot {
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
           flex-shrink: 0;
         }
+        .time-hint.past   { color: #999; }
+        .time-hint.soon   { color: #333; }
+        .time-hint.normal { color: #aaa; }
+        .time-hint.past   .time-hint-dot { background: #bbb; }
+        .time-hint.soon   .time-hint-dot { background: #111; }
+        .time-hint.normal .time-hint-dot { background: #ccc; }
 
+        /* ── REMINDER BANNER ── */
+        .reminder-banner {
+          margin-top: 16px;
+          padding: 12px 16px;
+          border: 1px solid #ddd;
+          background: #fafafa;
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+        }
+        .reminder-banner.scheduled { border-color: #333; background: #f5f5f5; }
+        .reminder-banner.sent      { border-color: #111; background: #111;    }
+
+        .reminder-icon {
+          font-size: 14px;
+          flex-shrink: 0;
+          margin-top: 1px;
+        }
+
+        .reminder-text {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .reminder-title {
+          font-size: 10px;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+          font-weight: 500;
+        }
+        .reminder-sub {
+          font-size: 11px;
+          letter-spacing: 0.04em;
+          color: #777;
+        }
+        .reminder-banner.scheduled .reminder-title { color: #111; }
+        .reminder-banner.scheduled .reminder-sub   { color: #666; }
+        .reminder-banner.sent      .reminder-title { color: #fff; }
+        .reminder-banner.sent      .reminder-sub   { color: #888; }
+
+        .reminder-countdown {
+          margin-left: auto;
+          font-size: 18px;
+          font-weight: 300;
+          color: #111;
+          letter-spacing: -0.02em;
+          flex-shrink: 0;
+          align-self: center;
+        }
+
+        /* ── PHONE ROW ── */
+        .phone-row { display: flex; width: 100%; }
+        .phone-code-wrap { position: relative; flex-shrink: 0; }
         .phone-code-select {
           appearance: none;
           -webkit-appearance: none;
@@ -186,16 +283,11 @@ export default function Home() {
           outline: none;
           cursor: pointer;
           height: 100%;
-          min-width: 80px;
+          min-width: 88px;
           transition: border-color 0.15s, background 0.15s;
           border-radius: 0;
         }
-
-        .phone-code-select:focus {
-          border-color: #111;
-          background: #e8e8e8;
-        }
-
+        .phone-code-select:focus { border-color: #111; background: #e8e8e8; }
         .phone-code-arrow {
           position: absolute;
           right: 10px;
@@ -204,9 +296,7 @@ export default function Home() {
           pointer-events: none;
           color: #777;
           font-size: 9px;
-          line-height: 1;
         }
-
         .phone-number-input {
           flex: 1;
           background: #fafafa;
@@ -218,37 +308,20 @@ export default function Home() {
           color: #111;
           outline: none;
           transition: border-color 0.15s, background 0.15s;
-          width: 100%;
           -webkit-appearance: none;
         }
-
-        .phone-number-input:focus {
-          border-color: #111;
-          background: #fff;
-        }
-
-        .phone-number-input::placeholder {
-          color: #bbb;
-        }
-
-        /* Focus sync: when number input focused, highlight both borders */
+        .phone-number-input:focus { border-color: #111; background: #fff; }
+        .phone-number-input::placeholder { color: #bbb; }
         .phone-row:focus-within .phone-code-select,
-        .phone-row:focus-within .phone-number-input {
-          border-color: #111;
-        }
-
+        .phone-row:focus-within .phone-number-input { border-color: #111; }
         .phone-preview {
           font-size: 10px;
           color: #aaa;
           letter-spacing: 0.06em;
           margin-top: 5px;
           min-height: 14px;
-          transition: color 0.15s;
         }
-
-        .phone-preview.ready {
-          color: #666;
-        }
+        .phone-preview.ready { color: #666; }
 
         .booking-btn {
           margin-top: 12px;
@@ -265,16 +338,8 @@ export default function Home() {
           transition: background 0.15s, color 0.15s;
           font-weight: 500;
         }
-
-        .booking-btn:hover:not(:disabled) {
-          background: #fff;
-          color: #111;
-        }
-
-        .booking-btn:disabled {
-          opacity: 0.45;
-          cursor: not-allowed;
-        }
+        .booking-btn:hover:not(:disabled) { background: #fff; color: #111; }
+        .booking-btn:disabled { opacity: 0.45; cursor: not-allowed; }
       `}</style>
 
       <div className="booking-root">
@@ -328,6 +393,7 @@ export default function Home() {
               </span>
             </div>
 
+            {/* ── DATE & TIME ── */}
             <div className="field-wrap">
               <label>Date & Time</label>
               <input
@@ -338,6 +404,61 @@ export default function Home() {
                   setForm({ ...form, appointment_time: e.target.value })
                 }
               />
+
+              {/* Hint text below the time input */}
+              {hint.show && (
+                <>
+                  {hint.minsAway <= 0 && (
+                    <span className="time-hint past">
+                      <span className="time-hint-dot" />
+                      This time has already passed
+                    </span>
+                  )}
+                  {hint.minsAway > 0 && hint.withinHour && (
+                    <span className="time-hint soon">
+                      <span className="time-hint-dot" />
+                      Within 1 hour — a reminder will be sent 1 min after booking
+                    </span>
+                  )}
+                  {hint.minsAway > 60 && (
+                    <span className="time-hint normal">
+                      <span className="time-hint-dot" />
+                      {hint.minsAway >= 1440
+                        ? `${Math.round(hint.minsAway / 60 / 24)} day${Math.round(hint.minsAway / 60 / 24) !== 1 ? "s" : ""} away`
+                        : hint.minsAway >= 60
+                        ? `${Math.round(hint.minsAway / 60)} hr${Math.round(hint.minsAway / 60) !== 1 ? "s" : ""} away`
+                        : `${hint.minsAway} min away`}
+                      {" "}— reminder will be sent before 1 hour of appointment
+                    </span>
+                  )}
+                </>
+              )}
+
+              {/* Reminder status banner — shown after booking */}
+              {reminderStatus === "scheduled" && (
+                <div className="reminder-banner scheduled">
+                  <span className="reminder-icon">◷</span>
+                  <div className="reminder-text">
+                    <span className="reminder-title">Reminder Scheduled</span>
+                    <span className="reminder-sub">
+                      Sending reminder message in {reminderCountdown}s
+                    </span>
+                  </div>
+                  <span className="reminder-countdown">{reminderCountdown}</span>
+                </div>
+              )}
+
+              {reminderStatus === "sent" && (
+                <div className="reminder-banner sent">
+                  <span className="reminder-icon">✓</span>
+                  <div className="reminder-text">
+                    <span className="reminder-title">Reminder Sent</span>
+                    <span className="reminder-sub">
+                      Message dispatched successfully
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
 
             <button className="booking-btn" onClick={submit} disabled={loading}>
