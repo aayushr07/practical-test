@@ -3,16 +3,13 @@ import { sendWhatsApp } from "@/lib/whatsapp";
 
 export async function GET() {
   try {
-    const now = new Date();
-    const oneHourLater = new Date(
-      now.getTime() + 60 * 60 * 1000
-    );
+    const now = new Date().toISOString();
 
-    // STEP 1: fetch candidates
+    //ONLY exact reminder time due now
     const { data: appointments, error } = await supabase
       .from("appointments")
       .select("*")
-      .lte("appointment_time", oneHourLater.toISOString())
+      .lte("reminder_time", now)
       .eq("reminder_sent", false);
 
     if (error) {
@@ -28,42 +25,23 @@ export async function GET() {
 
     let sentCount = 0;
 
-    // STEP 2: process one by one safely
     for (const appt of appointments) {
       try {
-        // 🔒 IMPORTANT: mark FIRST to prevent duplicate cron sends
-        const { error: updateError } = await supabase
-          .from("appointments")
-          .update({ reminder_sent: true })
-          .eq("id", appt.id);
-
-        if (updateError) {
-          console.error(
-            "Update failed:",
-            updateError
-          );
-          continue;
-        }
-
-        // STEP 3: send WhatsApp
+        
         await sendWhatsApp(
           appt.phone,
           `Reminder: Your appointment is at ${appt.appointment_time}`
         );
 
-        sentCount++;
-      } catch (err) {
-        console.error(
-          "Reminder send failed:",
-          appt.id,
-          err
-        );
-
-        // optional rollback (so it can retry later)
+        // mark sent ONLY after success
         await supabase
           .from("appointments")
-          .update({ reminder_sent: false })
+          .update({ reminder_sent: true })
           .eq("id", appt.id);
+
+        sentCount++;
+      } catch (err) {
+        console.error("Reminder failed:", appt.id, err);
       }
     }
 
@@ -72,8 +50,6 @@ export async function GET() {
       sent: sentCount,
     });
   } catch (err: any) {
-    console.error("Reminder CRON error:", err);
-
     return Response.json(
       {
         success: false,

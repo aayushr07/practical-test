@@ -1,29 +1,62 @@
 "use client";
-
+//The UI is Created using the Claude AI for making it decent.
 import { useState } from "react";
 
 const COUNTRY_CODES = [
-  { code: "+91", country: "IN" },
-  { code: "+1", country: "US" },
-  { code: "+44", country: "GB" },
-  { code: "+61", country: "AU" },
+  { code: "+1",   country: "US" },
+  { code: "+44",  country: "GB" },
+  { code: "+61",  country: "AU" },
   { code: "+971", country: "AE" },
-  { code: "+65", country: "SG" },
-  { code: "+60", country: "MY" },
-  { code: "+92", country: "PK" },
+  { code: "+65",  country: "SG" },
+  { code: "+60",  country: "MY" },
+  { code: "+91",  country: "IN" },
+  { code: "+92",  country: "PK" },
   { code: "+880", country: "BD" },
-  { code: "+94", country: "LK" },
+  { code: "+94",  country: "LK" },
   { code: "+977", country: "NP" },
-  { code: "+33", country: "FR" },
-  { code: "+49", country: "DE" },
-  { code: "+81", country: "JP" },
-  { code: "+86", country: "CN" },
-  { code: "+55", country: "BR" },
-  { code: "+27", country: "ZA" },
+  { code: "+33",  country: "FR" },
+  { code: "+49",  country: "DE" },
+  { code: "+81",  country: "JP" },
+  { code: "+86",  country: "CN" },
+  { code: "+55",  country: "BR" },
+  { code: "+27",  country: "ZA" },
   { code: "+234", country: "NG" },
-  { code: "+20", country: "EG" },
-  { code: "+7", country: "RU" },
+  { code: "+20",  country: "EG" },
+  { code: "+7",   country: "RU" },
 ];
+
+
+function localInputToET(datetimeLocal: string): Date {
+  
+  // EST = UTC-5, EDT = UTC-4 (DST). 
+  const [datePart, timePart] = datetimeLocal.split("T");
+  const [year, month, day] = datePart.split("-").map(Number);
+  const [hour, minute] = timePart.split(":").map(Number);
+
+  
+  const probe = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  const etString = probe.toLocaleString("en-US", { timeZone: "America/New_York", hour12: false });
+  
+  // Currently UTC to ET is UTC-4
+ 
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hour12: false,
+  });
+
+  // Try UTC directly and measure the ET offset
+  const utcCandidate = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  const parts = formatter.formatToParts(utcCandidate);
+  const p: Record<string, number> = {};
+  parts.forEach(({ type, value }) => { if (type !== "literal") p[type] = parseInt(value); });
+  const etHour = p.hour === 24 ? 0 : p.hour;
+  // Difference between what ET shows vs what we want
+  const diffMinutes = (hour - etHour) * 60 + (minute - p.minute);
+  // Adjust UTC candidate by that diff
+  return new Date(utcCandidate.getTime() + diffMinutes * 60_000);
+}
 
 function getReminderHint(appointmentTime: string): {
   show: boolean;
@@ -31,7 +64,9 @@ function getReminderHint(appointmentTime: string): {
   minsAway: number;
 } {
   if (!appointmentTime) return { show: false, withinHour: false, minsAway: 0 };
-  const diffMs = new Date(appointmentTime).getTime() - Date.now();
+  //To treat Local time as ET.
+  const appointmentDate = localInputToET(appointmentTime);
+  const diffMs = appointmentDate.getTime() - Date.now();
   const minsAway = Math.round(diffMs / 1000 / 60);
   if (diffMs <= 0) return { show: true, withinHour: false, minsAway };
   return { show: true, withinHour: minsAway <= 60, minsAway };
@@ -43,7 +78,7 @@ export default function Home() {
     phone: "",
     appointment_time: "",
   });
-  const [countryCode, setCountryCode] = useState("+91");
+  const [countryCode, setCountryCode] = useState("+1");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [loading, setLoading] = useState(false);
   const [reminderStatus, setReminderStatus] = useState<"idle" | "scheduled" | "sent">("idle");
@@ -52,7 +87,8 @@ export default function Home() {
   const hint = getReminderHint(form.appointment_time);
 
   function scheduleReminder(appointmentTime: string, name: string, phone: string) {
-    const diffMs = new Date(appointmentTime).getTime() - Date.now();
+    const appointmentDate = localInputToET(appointmentTime);
+    const diffMs = appointmentDate.getTime() - Date.now();
     const diffMins = diffMs / 1000 / 60;
     if (diffMins <= 0 || diffMins > 60) return;
 
@@ -70,10 +106,14 @@ export default function Home() {
       clearInterval(ticker);
       setReminderCountdown(null);
       try {
-        await fetch("/api/send-reminder", {
+        await fetch("/api/reminders", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, phone, appointment_time: appointmentTime }),
+          body: JSON.stringify({
+            name,
+            phone,
+            appointment_time: appointmentDate.toISOString(),
+          }),
         });
         setReminderStatus("sent");
       } catch (err) {
@@ -85,12 +125,17 @@ export default function Home() {
 
   async function submit() {
     const fullPhone = `${countryCode}${phoneNumber.replace(/\s+/g, "")}`;
+
+    // Convert the local time value(ET) to a proper UTC ISO string to set the time correctly in DB and correct remainder in UTC.
+    const appointmentDate = localInputToET(form.appointment_time);
+    const utcISO = appointmentDate.toISOString();
+
     try {
       setLoading(true);
       const res = await fetch("/api/appointments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, phone: fullPhone }),
+        body: JSON.stringify({ ...form, phone: fullPhone, appointment_time: utcISO }),
       });
       const result = await res.json();
       if (!res.ok) {
@@ -101,7 +146,7 @@ export default function Home() {
       scheduleReminder(form.appointment_time, form.name, fullPhone);
       setForm({ name: "", phone: "", appointment_time: "" });
       setPhoneNumber("");
-      setCountryCode("+91");
+      setCountryCode("+1");
     } catch (error) {
       console.error(error);
       alert("Something went wrong");
@@ -194,7 +239,6 @@ export default function Home() {
           cursor: pointer;
         }
 
-        /* ── TIME HINT ── */
         .time-hint {
           font-size: 10px;
           letter-spacing: 0.06em;
@@ -217,7 +261,6 @@ export default function Home() {
         .time-hint.soon   .time-hint-dot { background: #111; }
         .time-hint.normal .time-hint-dot { background: #ccc; }
 
-        /* ── REMINDER BANNER ── */
         .reminder-banner {
           margin-top: 16px;
           padding: 12px 16px;
@@ -235,7 +278,6 @@ export default function Home() {
           flex-shrink: 0;
           margin-top: 1px;
         }
-
         .reminder-text {
           display: flex;
           flex-direction: column;
@@ -267,7 +309,6 @@ export default function Home() {
           align-self: center;
         }
 
-        /* ── PHONE ROW ── */
         .phone-row { display: flex; width: 100%; }
         .phone-code-wrap { position: relative; flex-shrink: 0; }
         .phone-code-select {
@@ -378,7 +419,7 @@ export default function Home() {
                 </div>
                 <input
                   className="phone-number-input"
-                  placeholder="9876543210"
+                  placeholder="2025551234"
                   value={phoneNumber}
                   maxLength={13}
                   onChange={(e) =>
@@ -393,9 +434,8 @@ export default function Home() {
               </span>
             </div>
 
-            {/* ── DATE & TIME ── */}
             <div className="field-wrap">
-              <label>Date & Time</label>
+              <label>Date & Time (ET)</label>
               <input
                 className="booking-input"
                 type="datetime-local"
@@ -405,7 +445,6 @@ export default function Home() {
                 }
               />
 
-              {/* Hint text below the time input */}
               {hint.show && (
                 <>
                   {hint.minsAway <= 0 && (
@@ -434,7 +473,6 @@ export default function Home() {
                 </>
               )}
 
-              {/* Reminder status banner — shown after booking */}
               {reminderStatus === "scheduled" && (
                 <div className="reminder-banner scheduled">
                   <span className="reminder-icon">◷</span>

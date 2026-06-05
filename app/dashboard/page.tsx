@@ -1,6 +1,23 @@
 "use client";
-
+//The decent UI is created using the Claude AI the logic is same
 import { useEffect, useState } from "react";
+
+function formatET(value: string) {
+  if (!value) return "—";
+  // Supabase returns "2026-06-06T09:00:00" without Z so force it to be read as UTC
+  const normalized = value.endsWith("Z") || value.includes("+") ? value : value + "Z";
+  const date = new Date(normalized);
+  if (isNaN(date.getTime())) return value;
+  return date.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
 
 export default function Dashboard() {
   const [data, setData] = useState<any[]>([]);
@@ -190,8 +207,8 @@ export default function Dashboard() {
                     <span className="appt-field-value">{a.phone}</span>
                   </div>
                   <div className="appt-field full-width">
-                    <span className="appt-field-label">Scheduled For</span>
-                    <span className="appt-field-value">{a.appointment_time}</span>
+                    <span className="appt-field-label">Scheduled For (ET)</span>
+                    <span className="appt-field-value">{formatET(a.appointment_time)}</span>
                   </div>
                   <span className="appt-index">#{String(i + 1).padStart(2, "0")}</span>
                 </div>
