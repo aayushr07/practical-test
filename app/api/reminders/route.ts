@@ -30,7 +30,7 @@ export async function GET() {
         
         await sendWhatsApp(
           appt.phone,
-          `Reminder: Your appointment is at ${appt.appointment_time}`
+          `Reminder: Your appointment is at ${appt.appointment_time}UTC`
         );
 
         // mark sent ONLY after success
